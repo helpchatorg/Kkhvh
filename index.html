@@ -1225,6 +1225,7 @@
         }
         .wallet-history-row .badge.good { background: #dcfce7; }
         .wallet-history-row .badge.bad { background: #fee2e2; }
+        .wallet-history-row .badge.neutral { background: #f1f5f9; }
         .wallet-history-row .badge.neutral { background: #e0e7ff; }
         .wallet-history-row .content { min-width: 0; flex: 1 1 auto; }
         .wallet-history-row .title-line { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
@@ -10561,9 +10562,10 @@ function openWalletEkycCooldownModal() {
         if (pastCombined.length) {
             html += '<div style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:14px;padding:4px 10px;">' +
                 pastCombined.map(rq => {
-                    const badgeClass = rq.status === 'Rejected' ? 'bad' : 'good';
+                    const badgeClass = rq.status === 'Rejected' ? 'bad' : (rq.status === 'Superseded' ? 'neutral' : 'good');
                     const statusHtml = rq.status === 'Approved' ? '<span style="color:#16a34a;">✅ Approved &amp; Deducted</span>'
                         : rq.status === 'Rejected' ? '<span style="color:#dc2626;">❌ Rejected</span>'
+                        : rq.status === 'Superseded' ? '<span style="color:#64748b;">↩️ Replaced by a newer request from Super Admin</span>'
                         : '<span style="color:#16a34a;">✅ Deducted</span>';
                     return '<div class="wallet-history-row">' +
                         '<div class="badge ' + badgeClass + '">' + (CHARGE_ICONS[rq.type] || '🧾') + '</div>' +
