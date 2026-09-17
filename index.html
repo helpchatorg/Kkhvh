@@ -2914,8 +2914,12 @@
     </div>
 </div>
 
+<!-- ===== SUBSCRIPTION LOCK SCREEN (Level 3 — shown instead of the dashboard) ===== -->
+<div id="subscription-lock-screen" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.92);z-index:99998;padding:20px;box-sizing:border-box;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>
+
 <!-- ===== MAIN APP ===== -->
 <div class="container" id="main-app">
+    <div id="subscription-restriction-banner" style="display:none;"></div>
 
     <!-- ADMIN CONFIG -->
     <div id="owner-sec" class="section active">
@@ -4865,6 +4869,7 @@
         document.getElementById('ticket-archive-settings-modal').classList.remove('open');
     }
     function saveTicketArchiveSettings() {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(2, 'Ticket Archive Settings')) return;
         config.ticketArchive = {
             enabled: document.getElementById('tas-enabled').checked,
             days: parseInt(document.getElementById('tas-days').value, 10) || 7
@@ -6237,6 +6242,12 @@
             loggedInStudent = null; currentFeeStudentId = null;
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.getElementById('login-sec').style.display = 'none';
+            if (typeof autoGenerateRenewalIfDue === 'function') autoGenerateRenewalIfDue();
+            if (typeof autoRenewCheckAndProcess === 'function') autoRenewCheckAndProcess();
+            if (typeof renderSubscriptionLockScreenIfNeeded === 'function' && renderSubscriptionLockScreenIfNeeded(session.id)) {
+                setTimeout(() => { document.getElementById('page-loader').classList.add('hide'); }, 800);
+                return;
+            }
             document.getElementById('main-app').style.display = 'block';
             document.getElementById('admin-bottom-nav').style.display = 'flex';
             document.getElementById('student-bottom-nav').style.display = 'none';
@@ -6245,10 +6256,9 @@
             updateAdminHelpNotif();
             SamPolicy.check('admin', session.id, session.id);
             if (typeof gbRenderAdminPopup === 'function') gbRenderAdminPopup();
-            if (typeof autoGenerateRenewalIfDue === 'function') autoGenerateRenewalIfDue();
-            if (typeof autoRenewCheckAndProcess === 'function') autoRenewCheckAndProcess();
             if (typeof updateAdminMenuNotifDots === 'function') updateAdminMenuNotifDots();
             if (typeof checkSubscriptionReminderPopup === 'function') checkSubscriptionReminderPopup(session.id);
+            if (typeof renderSubscriptionRestrictionBanner === 'function') renderSubscriptionRestrictionBanner();
         } else if (session.type === 'student') {
             if (!session.adminId) { sessionStorage.removeItem('Samarthak_Session'); setTimeout(() => { document.getElementById('page-loader').classList.add('hide'); }, 800); return; }
             loadFromLocal(session.adminId);
@@ -7344,6 +7354,7 @@
     }
 
     function addNewShift() {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(2, 'Add/Edit Shift')) return;
         const name = document.getElementById('newShiftName').value.trim();
         const start = document.getElementById('newShiftStart').value;
         const end = document.getElementById('newShiftEnd').value;
@@ -7371,7 +7382,7 @@
         renderShiftList(); saveToLocal();
     }
 
-    function removeShift(idx) { config.shifts.splice(idx, 1); renderShiftList(); saveToLocal(); }
+    function removeShift(idx) { if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(2, 'Delete Shift')) return; config.shifts.splice(idx, 1); renderShiftList(); saveToLocal(); }
 
     function saveOwnerSettings() {
         document.querySelectorAll('.error-msg').forEach(e => e.style.display = 'none');
@@ -7580,6 +7591,7 @@
     }
 
     function validateAndBook() {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(1, 'Student Registration')) return;
         document.querySelectorAll('.error-msg').forEach(e => e.style.display = 'none');
         let err = false;
         if (!selectedSeat) { document.getElementById('err-seat').style.display = 'block'; err = true; }
@@ -7658,6 +7670,7 @@
     let currentDemoConfirmId = null;
 
     function validateAndDemoBook() {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(1, 'Demo Registration')) return;
         document.querySelectorAll('.error-msg').forEach(e => e.style.display = 'none');
         let err = false;
         if (!selectedSeat) { document.getElementById('err-seat').style.display = 'block'; err = true; }
@@ -7983,6 +7996,7 @@
     function closeWlSettingsModal() { document.getElementById('wl-settings-overlay').style.display = 'none'; }
 
     function saveWlSettingsModal() {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(2, 'Waiting List Settings')) return;
         if (!config.smartSeat) config.smartSeat = { enabled:true };
         config.smartSeat.onRelease = document.getElementById('cfgAutoAllocOnRelease').checked;
         config.smartSeat.onDemoRelease = document.getElementById('cfgAutoAllocOnDemoRelease').checked;
@@ -10241,6 +10255,7 @@ function openWalletEkycCooldownModal() {
         if (typeof autoGenerateRenewalIfDue === 'function') autoGenerateRenewalIfDue();
         if (typeof autoRenewCheckAndProcess === 'function') autoRenewCheckAndProcess();
         if (typeof updateAdminMenuNotifDots === 'function') updateAdminMenuNotifDots();
+        if (typeof renderSubscriptionRestrictionBanner === 'function') renderSubscriptionRestrictionBanner();
         const walletModal = document.getElementById('admin-wallet-modal');
         if (walletModal && walletModal.classList.contains('modal-open')) renderAdminWalletModal();
 
@@ -10351,7 +10366,106 @@ function openWalletEkycCooldownModal() {
         }
         setTimeout(() => alert(msg), 700);
     }
-    // Invoice numbering: deterministic from the entry's position in this wallet's subscription
+    // ===== SUBSCRIPTION ENFORCEMENT LADDER =====
+    // Applies ONLY when Auto-Renew is OFF (if it's ON, autoGenerateRenewalIfDue above already
+    // keeps the subscription current, so this ladder never has a reason to engage) and the
+    // subscription is genuinely expired (nextRenewalDate in the past) with no Accept yet:
+    //   Day 0–5 since expiry  → Level 0, no restriction (grace period)
+    //   Day 6–8               → Level 1: new registrations, student edits, fee collection blocked
+    //   Day 9–10              → Level 2: Level 1 + Library/system configuration edits blocked
+    //   Day 11+                → Level 3: dashboard fully locked, only a Super Admin override can restore it
+    const SUB_ENFORCE_STUDENT_DAY = 5;   // restriction starts the day AFTER this many days overdue
+    const SUB_ENFORCE_CONFIG_DAY = 8;
+    const SUB_ENFORCE_LOCK_DAY = 10;
+    function getSubscriptionEnforcementInfo() {
+        const none = { level: 0, daysSinceExpiry: 0, planName: null };
+        if (!wallet || !wallet.subscription || !wallet.subscription.planId || !wallet.subscription.nextRenewalDate) return none;
+        if (wallet.subscription.autoRenew) return none; // Auto-Renew ON — this ladder never applies
+        const daysSinceExpiry = Math.floor((new Date() - new Date(wallet.subscription.nextRenewalDate)) / 86400000);
+        if (daysSinceExpiry <= SUB_ENFORCE_STUDENT_DAY) return none;
+        let level = 1;
+        if (daysSinceExpiry > SUB_ENFORCE_CONFIG_DAY) level = 2;
+        if (daysSinceExpiry > SUB_ENFORCE_LOCK_DAY) level = 3;
+        return { level: level, daysSinceExpiry: daysSinceExpiry, planName: wallet.subscription.planName };
+    }
+    // Called before any action gated by the ladder (new/edit registration, fee collection,
+    // system configuration edits). Shows a clear explanation and returns true if the action
+    // should be blocked — callers must stop (return) immediately when this returns true.
+    function blockIfSubscriptionRestricted(minLevel, actionLabel) {
+        const info = getSubscriptionEnforcementInfo();
+        if (info.level < minLevel) return false;
+        const what = minLevel >= 2 ? 'Library/system configuration changes are' : 'New registrations, student record changes, and fee collection are';
+        alert('🔒 Access Restricted\n\n' + what + ' currently blocked because your "' + (info.planName || 'subscription') + '" plan has been expired for ' + info.daysSinceExpiry + ' day(s) and the pending renewal has not been accepted yet.\n\nPlease Accept the Renewal Charge request in your Wallet to restore full access.' + (actionLabel ? ('\n\n(Blocked action: ' + actionLabel + ')') : ''));
+        return true;
+    }
+    // Persistent top-of-dashboard banner shown once Level 1 or 2 is active (Level 3 shows the
+    // full lock screen instead, see renderSubscriptionLockScreenIfNeeded below).
+    function renderSubscriptionRestrictionBanner() {
+        const host = document.getElementById('subscription-restriction-banner');
+        if (!host) return;
+        const info = getSubscriptionEnforcementInfo();
+        if (info.level === 0 || info.level >= 3) { host.style.display = 'none'; host.innerHTML = ''; return; }
+        const msg = info.level === 2
+            ? ('🔒 Configuration Locked — Your "' + (info.planName || 'subscription') + '" plan has been expired for ' + info.daysSinceExpiry + ' day(s). New registrations, student edits, fee collection AND Library/system configuration changes are blocked. Accept the pending Renewal Charge in your Wallet to restore access.')
+            : ('⚠️ Limited Access — Your "' + (info.planName || 'subscription') + '" plan has been expired for ' + info.daysSinceExpiry + ' day(s). New registrations, student edits, and fee collection are blocked until the pending Renewal Charge is Accepted in your Wallet.');
+        host.style.display = 'block';
+        host.innerHTML = '<div style="background:' + (info.level === 2 ? '#7f1d1d' : '#92400e') + ';color:#fff;padding:10px 16px;font-size:0.78rem;font-weight:700;line-height:1.5;text-align:center;">' + msg + '</div>';
+    }
+    // Full-dashboard lock (Level 3 — expired more than 10 days with no Accept and Auto-Renew
+    // OFF). Called right after login/session-restore, BEFORE the normal dashboard is shown.
+    // Returns true (and shows the lock screen) if the dashboard must stay locked; the caller
+    // must not proceed to open the normal dashboard in that case. The ONLY way out is the
+    // Super Admin's "Accept by Super Admin (Authority granted by Admin)" action on their side,
+    // which accepts the pending renewal directly — the next login/refresh then finds the
+    // subscription current again and this simply stops returning true.
+    function renderSubscriptionLockScreenIfNeeded(adminId) {
+        const screen = document.getElementById('subscription-lock-screen');
+        if (!screen) return false;
+        const info = getSubscriptionEnforcementInfo();
+        if (info.level < 3) { screen.style.display = 'none'; return false; }
+        document.getElementById('main-app').style.display = 'none';
+        document.getElementById('admin-bottom-nav').style.display = 'none';
+        document.getElementById('login-sec').style.display = 'none';
+        const alreadyGranted = !!(wallet && wallet.renewalAuthorityGrantedToSuperAdmin && wallet.renewalAuthorityGrantedToSuperAdmin.granted);
+        const grantedAtStr = alreadyGranted ? (formatAppDate ? formatAppDate(wallet.renewalAuthorityGrantedToSuperAdmin.grantedAt) : new Date(wallet.renewalAuthorityGrantedToSuperAdmin.grantedAt).toLocaleString()) : '';
+        screen.innerHTML =
+            '<div style="max-width:420px;margin:60px auto;background:#fff;border-radius:20px;padding:28px 22px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,0.25);">' +
+                '<div style="font-size:2.6rem;margin-bottom:6px;">🔒</div>' +
+                '<div style="font-size:1.05rem;font-weight:900;color:#1e293b;margin-bottom:10px;">Dashboard Locked</div>' +
+                '<div style="font-size:0.82rem;color:#475569;line-height:1.6;margin-bottom:14px;">' +
+                    'Your "' + (info.planName || 'subscription') + '" plan has been expired for <strong>' + info.daysSinceExpiry + ' day(s)</strong> and the pending Renewal Charge request was never Accepted, so this dashboard has been automatically locked for security and billing compliance.' +
+                '</div>' +
+                (alreadyGranted
+                    ? ('<div style="font-size:0.8rem;color:#166534;line-height:1.6;background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:12px;margin-bottom:16px;">' +
+                        '✅ You granted the Super Admin authority to accept this renewal on ' + grantedAtStr + '. They can now Accept it from their dashboard — once they do, this dashboard unlocks automatically. No further action needed from you.' +
+                      '</div>')
+                    : ('<div style="font-size:0.8rem;color:#475569;line-height:1.6;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px;margin-bottom:16px;">' +
+                        'You can no longer Accept the pending Renewal Charge yourself since you cannot log in. Instead, you can grant your Super Admin the authority to accept it on your behalf — this will deduct the amount from your wallet, renew the subscription, and unlock this dashboard immediately once they do it.' +
+                      '</div>' +
+                      '<button onclick="grantSuperAdminRenewalAuthority(\'' + adminId + '\')" style="width:100%;background:#dc2626;color:#fff;border:none;padding:12px;border-radius:10px;font-weight:800;font-size:0.82rem;cursor:pointer;margin-bottom:10px;">🔑 Grant Authority to Super Admin to Accept</button>')
+                ) +
+                '<button onclick="adminLockScreenLogout()" style="background:#1e293b;color:#fff;border:none;padding:11px 20px;border-radius:10px;font-weight:800;font-size:0.8rem;cursor:pointer;">Log Out</button>' +
+            '</div>';
+        screen.style.display = 'block';
+        return true;
+    }
+    // Explicit, Admin-initiated consent — clicked right from the lock screen (the one action
+    // still available while locked). Only after this is granted does the Super Admin's "Accept
+    // by Super Admin (Authority granted by Admin)" button appear on their side; simply reaching
+    // Day 11 does NOT authorize the Super Admin to act on its own.
+    function grantSuperAdminRenewalAuthority(adminId) {
+        if (!wallet) return;
+        if (!confirm('Grant your Super Admin the authority to accept your pending Renewal Charge on your behalf?\n\nThis will let them deduct the amount from your wallet and renew your subscription without further action from you — your dashboard unlocks automatically once they do.')) return;
+        wallet.renewalAuthorityGrantedToSuperAdmin = { granted: true, grantedAt: new Date().toISOString(), grantedBy: adminId };
+        if (typeof persistWalletOnly === 'function') persistWalletOnly();
+        renderSubscriptionLockScreenIfNeeded(adminId);
+    }
+    function adminLockScreenLogout() {
+        sessionStorage.removeItem('Samarthak_Session');
+        document.getElementById('subscription-lock-screen').style.display = 'none';
+        document.getElementById('login-sec').style.display = 'block';
+        _loggedInAdminId = null;
+    }
     // history (1st renewal = 0001, 2nd = 0002, ...) so it never changes on re-render and every
     // invoice for a wallet gets its own number, separate from the underlying Transaction ID.
     function subscriptionInvoiceNumber(entry, index) {
@@ -11163,6 +11277,7 @@ function openWalletEkycCooldownModal() {
     }
 
     function saveNewMonthlyFee() {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(1, 'Fee Collection')) return;
         document.querySelectorAll('.error-msg').forEach(e => e.style.display='none');
         const monthValue = document.getElementById('feeMonth').value, amount = document.getElementById('feeAmount').value;
         const mode = document.getElementById('feePayMode').value;
@@ -11265,6 +11380,7 @@ function openWalletEkycCooldownModal() {
     function downloadSpecificMonth(index) { const s = students.find(x => x.id === currentFeeStudentId); if (s) generatePDF(s, index); }
 
     function editFeeEntry(index) {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(1, 'Edit Fee Entry')) return;
         if (index === 0) return;
         const s = students.find(x => x.id === currentFeeStudentId), f = s.feeHistory[index];
         document.getElementById('feeMonth').value = f.month; document.getElementById('feeAmount').value = f.amount;
@@ -11280,6 +11396,7 @@ function openWalletEkycCooldownModal() {
     }
 
     function deleteFeeEntry(index) {
+        if (typeof blockIfSubscriptionRestricted === 'function' && blockIfSubscriptionRestricted(1, 'Delete Fee Entry')) return;
         if (index === 0) { alert("First fee entry cannot be deleted."); return; }
         const s = students.find(x => x.id === currentFeeStudentId);
         const entry = s.feeHistory[index];
@@ -13644,6 +13761,10 @@ function openWalletEkycCooldownModal() {
         loggedInStudent = null; currentFeeStudentId = null;
         document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
         document.getElementById('login-sec').style.display = 'none';
+        sessionStorage.setItem('Samarthak_Session', JSON.stringify({ type: 'admin', id: id }));
+        if (typeof autoGenerateRenewalIfDue === 'function') autoGenerateRenewalIfDue();
+        if (typeof autoRenewCheckAndProcess === 'function') autoRenewCheckAndProcess();
+        if (typeof renderSubscriptionLockScreenIfNeeded === 'function' && renderSubscriptionLockScreenIfNeeded(id)) return;
         document.getElementById('main-app').style.display = 'block';
         document.getElementById('admin-bottom-nav').style.display = 'flex';
         document.getElementById('student-bottom-nav').style.display = 'none';
@@ -13651,13 +13772,10 @@ function openWalletEkycCooldownModal() {
         updateAdminTicketNotif();
         updateAdminHelpNotif();
         if (typeof updateAdminMenuNotifDots === 'function') updateAdminMenuNotifDots();
-        // Remember this session so a page refresh doesn't log the admin out.
-        sessionStorage.setItem('Samarthak_Session', JSON.stringify({ type: 'admin', id: id }));
         SamPolicy.check('admin', id, id);
         if (typeof gbRenderAdminPopup === 'function') gbRenderAdminPopup();
-        if (typeof autoGenerateRenewalIfDue === 'function') autoGenerateRenewalIfDue();
-        if (typeof autoRenewCheckAndProcess === 'function') autoRenewCheckAndProcess();
         if (typeof checkSubscriptionReminderPopup === 'function') checkSubscriptionReminderPopup(id);
+        if (typeof renderSubscriptionRestrictionBanner === 'function') renderSubscriptionRestrictionBanner();
     }
 
     // ===== SUPER ADMIN VERIFIED ACCESS (support / bug-fixing) =====
