@@ -10600,7 +10600,12 @@ function openWalletEkycCooldownModal() {
             wallet.subscription = wallet.subscription || { planId: null, planName: null, durationDays: null, startDate: null, nextRenewalDate: null, autoRenew: false, history: [] };
             const now = new Date();
             const currentNext = wallet.subscription.nextRenewalDate ? new Date(wallet.subscription.nextRenewalDate) : null;
-            const base = (currentNext && currentNext > now) ? currentNext : now;
+            // Stacking (adding onto time already paid for) only makes sense when the SAME plan is
+            // being renewed early. If the Admin/Super Admin is switching to a different plan, the
+            // new plan's own duration must count from today — otherwise leftover days from the old
+            // plan silently get added on top and the new plan's duration looks like it never applied.
+            const samePlan = wallet.subscription.planId === req.planId;
+            const base = (samePlan && currentNext && currentNext > now) ? currentNext : now;
             next = new Date(base.getTime() + req.durationDays * 24 * 60 * 60 * 1000);
             wallet.subscription.planId = req.planId;
             wallet.subscription.planName = req.planName;
@@ -10620,7 +10625,13 @@ function openWalletEkycCooldownModal() {
         const req = (wallet.chargeRequests || []).find(r => r.id === reqId && r.status === 'Pending');
         if (!req) return;
         const planNote = req.planName ? (' (' + req.planName + ' plan, ' + req.durationDays + ' days)') : '';
-        if (!confirm('Accept this renewal charge' + planNote + '? ₹' + req.amount + ' will be deducted from your wallet immediately (balance can go negative if insufficient).')) return;
+        const sub = wallet.subscription;
+        const daysLeftOnCurrent = (sub && sub.nextRenewalDate) ? Math.ceil((new Date(sub.nextRenewalDate) - new Date()) / 86400000) : 0;
+        const switchingPlan = req.planId && sub && sub.planId && sub.planId !== req.planId && daysLeftOnCurrent > 0;
+        const switchNote = switchingPlan
+            ? ('\n\n⚠️ Note: You are switching from "' + sub.planName + '" to "' + req.planName + '". The new plan\'s ' + req.durationDays + ' day(s) will be counted from today, not added to the ' + daysLeftOnCurrent + ' day(s) still left on your current plan — so you will lose ' + daysLeftOnCurrent + ' day(s). To avoid this loss, accept a plan change only when your current plan has 1–2 day(s) left, so little to no remaining time goes to waste.')
+            : '';
+        if (!confirm('Accept this renewal charge' + planNote + '? ₹' + req.amount + ' will be deducted from your wallet immediately (balance can go negative if insufficient).' + switchNote)) return;
         const result = applyRenewalChargeAcceptance(req, { auto: false });
         const subMsg = result.next ? ('\nSubscription renewed — next renewal on ' + (formatAppDate ? formatAppDate(result.next.toISOString()) : result.next.toLocaleDateString())) : '';
         refreshAllWalletDisplays();
