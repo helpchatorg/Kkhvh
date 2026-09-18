@@ -931,6 +931,7 @@
         }
         #fee-panel-modal.modal-open { display: block; }
         #admin-wallet-modal.modal-open { display: flex; }
+        #admin-subscription-modal.modal-open { display: flex; }
         #wallet-ekyc-modal.modal-open { display: flex; }
         #wallet-setup-modal.modal-open { display: flex; }
         #video-ekyc-modal.modal-open { display: flex; }
@@ -2534,27 +2535,42 @@
             <div id="admin-wallet-status-badge" style="margin-top:12px;"></div>
         </div>
         <div class="wallet-body">
-            <div id="admin-wallet-subscription-card"></div>
             <div class="wallet-section-label" style="margin-top:0;">⚙️ Wallet Controls</div>
             <div id="admin-wallet-actions" style="margin-bottom:6px;"></div>
             <div id="admin-wallet-ekyc-panel" style="margin-bottom:14px;"></div>
 
             <div class="wallet-history-tabs" style="display:flex; gap:6px; margin:14px 0 12px; border-bottom:1px solid var(--border);">
                 <button type="button" class="wallet-history-tab-btn active" id="admin-wallet-htab-txns" onclick="switchAdminWalletHistoryTab('txns')">📜 Transaction History</button>
-                <button type="button" class="wallet-history-tab-btn" id="admin-wallet-htab-charges" onclick="switchAdminWalletHistoryTab('charges')">🧾 Past Charge Requests</button>
                 <button type="button" class="wallet-history-tab-btn" id="admin-wallet-htab-lock" onclick="switchAdminWalletHistoryTab('lock')">🔒 Activate/Deactivate/Closure/eKYC Log</button>
             </div>
 
             <div id="admin-wallet-htab-panel-txns" class="wallet-history-tab-panel">
                 <div id="admin-wallet-tx-list" style="max-height:300px; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; touch-action:pan-y; scroll-behavior:smooth; border:1px solid var(--border); border-radius:12px; padding:8px;"></div>
             </div>
-            <div id="admin-wallet-htab-panel-charges" class="wallet-history-tab-panel" style="display:none;">
-                <div id="admin-wallet-charge-requests"></div>
-            </div>
             <div id="admin-wallet-htab-panel-lock" class="wallet-history-tab-panel" style="display:none;">
                 <div id="admin-wallet-ekyc-sheet-info" style="background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:9px 12px; margin-bottom:10px; font-size:0.74rem; color:var(--grey);"></div>
                 <div id="admin-wallet-lock-history"></div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== ADMIN SUBSCRIPTION MODAL ===== -->
+<div id="admin-subscription-modal" class="modal">
+    <div class="modal-content wallet-modal-content">
+        <div class="wallet-hero">
+            <div class="wallet-hero-top">
+                <div>
+                    <div class="wallet-hero-icon">💳</div>
+                    <h3 style="margin:0; font-size:1.15rem; color:#fff;">Subscription</h3>
+                </div>
+                <button class="wallet-close-x" onclick="closeAdminSubscriptionModal()">✕</button>
+            </div>
+        </div>
+        <div class="wallet-body">
+            <div id="admin-subscription-card"></div>
+            <div class="wallet-section-label">🧾 Renewal Charge Requests</div>
+            <div id="admin-subscription-charge-requests"></div>
         </div>
     </div>
 </div>
@@ -2960,6 +2976,10 @@
                         <div class="admin-dropdown-divider"></div>
                         <div class="admin-dropdown-item" onclick="closeAdminMenu(); openGrantSuperAdminAccess()">
                             🔓 Access Requests <span class="admin-menu-notif-dot" id="admin-accessreq-notif-dot" style="display:none;"></span>
+                        </div>
+                        <div class="admin-dropdown-divider"></div>
+                        <div class="admin-dropdown-item" onclick="closeAdminMenu(); openAdminSubscriptionModal();">
+                            💳 Subscription <span class="admin-menu-notif-dot" id="admin-subscription-notif-dot" style="display:none;"></span>
                         </div>
                         <div class="admin-dropdown-divider"></div>
                         <div class="admin-dropdown-item" onclick="closeAdminMenu(); SamPolicy.openViewer('admin', _loggedInAdminId, _loggedInAdminId);">
@@ -7929,6 +7949,16 @@
             accessDot.style.display = (req && req.status === 'pending') ? 'inline-block' : 'none';
         }
 
+        // Subscription: same due/expired condition as the Wallet dot, plus a pending renewal
+        // charge request — surfaced separately now that Subscription has its own menu item.
+        const subDot = document.getElementById('admin-subscription-notif-dot');
+        if (subDot) {
+            const hasPendingChargeSub = !!(wallet && (wallet.chargeRequests || []).some(r => r.status === 'Pending' && r.type === 'renewal'));
+            const subInfo2 = (wallet && typeof subscriptionStatusInfo === 'function') ? subscriptionStatusInfo(wallet.subscription) : null;
+            const subDue2 = !!(subInfo2 && (subInfo2.cls === 'expiring' || subInfo2.cls === 'expired'));
+            subDot.style.display = (hasPendingChargeSub || subDue2) ? 'inline-block' : 'none';
+        }
+
         // Policies: the Admin hasn't yet accepted the current published policy version.
         const policyDot = document.getElementById('admin-policies-notif-dot');
         if (policyDot) {
@@ -8920,6 +8950,16 @@
     }
     function closeAdminWalletModal() {
         document.getElementById('admin-wallet-modal').classList.remove('modal-open');
+    }
+    function openAdminSubscriptionModal() {
+        refreshWalletFromStorage();
+        renderAdminWalletSubscriptionCard();
+        renderAdminWalletChargeRequests();
+        document.getElementById('admin-subscription-modal').classList.add('modal-open');
+        if (typeof updateAdminMenuNotifDots === 'function') updateAdminMenuNotifDots();
+    }
+    function closeAdminSubscriptionModal() {
+        document.getElementById('admin-subscription-modal').classList.remove('modal-open');
     }
 
     // ===== STRICT GOVERNMENT ID NUMBER VALIDATION =====
@@ -10258,6 +10298,11 @@ function openWalletEkycCooldownModal() {
         if (typeof renderSubscriptionRestrictionBanner === 'function') renderSubscriptionRestrictionBanner();
         const walletModal = document.getElementById('admin-wallet-modal');
         if (walletModal && walletModal.classList.contains('modal-open')) renderAdminWalletModal();
+        const subscriptionModal = document.getElementById('admin-subscription-modal');
+        if (subscriptionModal && subscriptionModal.classList.contains('modal-open')) {
+            renderAdminWalletSubscriptionCard();
+            renderAdminWalletChargeRequests();
+        }
 
         const feePanelModal = document.getElementById('fee-panel-modal');
         const feePayModeEl = document.getElementById('feePayMode');
@@ -10479,7 +10524,7 @@ function openWalletEkycCooldownModal() {
         return (walletObj.transactions || []).find(t => t.id === txnId) || null;
     }
     function renderAdminWalletSubscriptionCard() {
-        const el = document.getElementById('admin-wallet-subscription-card');
+        const el = document.getElementById('admin-subscription-card');
         if (!el || !wallet) return;
         const sub = wallet.subscription;
         const info = subscriptionStatusInfo(sub);
@@ -10644,7 +10689,7 @@ function openWalletEkycCooldownModal() {
     }
 
     function renderAdminWalletChargeRequests() {
-        const host = document.getElementById('admin-wallet-charge-requests');
+        const host = document.getElementById('admin-subscription-charge-requests');
         if (!host || !wallet) return;
         const reqs = (wallet.chargeRequests || []).slice().reverse();
         const pending = reqs.find(r => r.status === 'Pending');
@@ -10667,25 +10712,19 @@ function openWalletEkycCooldownModal() {
             '</div>';
         }
         const past = reqs.filter(r => r.status !== 'Pending');
-        const directCharges = (wallet.transactions || []).filter(t => t.isSuperAdminCharge);
-        const CHARGE_ICONS = { maintenance: '🔧', penalty: '⚠️', renewal: '🔄' };
-        const CHARGE_LABELS = { maintenance: 'Annual Maintenance Charge', penalty: 'Penalty', renewal: 'Subscription Renewal Charge' };
-        const pastCombined = past.map(rq => ({ date: rq.decidedAt || rq.requestedAt, amount: rq.amount, type: 'renewal', status: rq.status, decisionReason: rq.decisionReason, note: rq.note }))
-            .concat(directCharges.map(t => ({ date: t.date, amount: t.amount, type: t.chargeType, status: 'Deducted', decisionReason: null, note: t.note })))
-            .sort((a, b) => new Date(b.date) - new Date(a.date));
-        if (pastCombined.length) {
+        if (past.length) {
             html += '<div style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:14px;padding:4px 10px;">' +
-                pastCombined.map(rq => {
+                past.map(rq => {
                     const badgeClass = rq.status === 'Rejected' ? 'bad' : (rq.status === 'Superseded' ? 'neutral' : 'good');
                     const statusHtml = rq.status === 'Approved' ? '<span style="color:#16a34a;">✅ Approved &amp; Deducted</span>'
                         : rq.status === 'Rejected' ? '<span style="color:#dc2626;">❌ Rejected</span>'
                         : rq.status === 'Superseded' ? '<span style="color:#64748b;">↩️ Replaced by a newer request from Super Admin</span>'
                         : '<span style="color:#16a34a;">✅ Deducted</span>';
                     return '<div class="wallet-history-row">' +
-                        '<div class="badge ' + badgeClass + '">' + (CHARGE_ICONS[rq.type] || '🧾') + '</div>' +
+                        '<div class="badge ' + badgeClass + '">🔄</div>' +
                         '<div class="content">' +
-                            '<div class="title-line"><span class="name">' + (CHARGE_LABELS[rq.type] || 'Charge') + '</span><span class="amt" style="color:#dc2626;">-₹' + rq.amount + '</span></div>' +
-                            '<div class="sub-line">' + fmtWalletDate(rq.date) + (rq.note ? ' • ' + rq.note : '') + '</div>' +
+                            '<div class="title-line"><span class="name">Subscription Renewal Charge' + (rq.planName ? ' — ' + rq.planName : '') + '</span><span class="amt" style="color:#dc2626;">-₹' + rq.amount + '</span></div>' +
+                            '<div class="sub-line">' + fmtWalletDate(rq.decidedAt || rq.requestedAt) + (rq.note ? ' • ' + rq.note : '') + '</div>' +
                             '<div class="status-line">' + statusHtml + '</div>' +
                             (rq.status === 'Rejected' && rq.decisionReason ? '<div class="reason-line">Reason: ' + rq.decisionReason + '</div>' : '') +
                         '</div>' +
@@ -10693,8 +10732,8 @@ function openWalletEkycCooldownModal() {
                 }).join('') +
                 '</div>';
         }
-        if (!pending && !pastCombined.length) {
-            html = '<div class="wallet-history-empty">🧾 No maintenance, penalty, or renewal charge requests yet.</div>';
+        if (!pending && !past.length) {
+            html = '<div class="wallet-history-empty">🧾 No renewal charge requests yet.</div>';
         }
         host.innerHTML = html;
     }
@@ -10792,7 +10831,7 @@ function openWalletEkycCooldownModal() {
     }
 
     function switchAdminWalletHistoryTab(tab) {
-        ['charges', 'txns', 'lock'].forEach(t => {
+        ['txns', 'lock'].forEach(t => {
             const btn = document.getElementById('admin-wallet-htab-' + t);
             const panel = document.getElementById('admin-wallet-htab-panel-' + t);
             if (btn) btn.classList.toggle('active', t === tab);
@@ -10871,10 +10910,8 @@ function openWalletEkycCooldownModal() {
     function renderAdminWalletModal() {
         document.getElementById('admin-wallet-id').innerText = wallet.id || '—';
         document.getElementById('admin-wallet-status-badge').innerHTML = walletStatusBadgeHtml(wallet.status || 'active');
-        renderAdminWalletSubscriptionCard();
         renderAdminWalletActions();
         renderAdminWalletEkycPanel();
-        renderAdminWalletChargeRequests();
         renderAdminWalletLockHistory();
         renderAdminWalletEkycSheetInfo();
         document.getElementById('admin-wallet-balance').innerText = '₹' + (wallet.balance || 0);
